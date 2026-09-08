@@ -1,0 +1,8 @@
+{
+  "name": "Remix: AMML Operations Dashboard",
+  "description": "Interactive cybersecurity and automated AI classifier mesh network operations center master deck dashboard running real-time cryptographic telemetry syncing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

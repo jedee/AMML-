@@ -1,0 +1,59 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net - Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Rules matching
+    match /events/{eventId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /devices/{deviceId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /markets/{marketId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /attendance/{attendanceId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /zones/{zoneId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /telemetry_logs/{logId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /staff/{staffId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /assets/{assetId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /asset_stocks/{stockId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /purchase_orders/{poId} {
+      allow read, write: if isSignedIn();
+    }
+  }
+}

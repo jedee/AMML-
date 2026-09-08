@@ -1,0 +1,123 @@
+{
+  "entities": {
+    "AmmlEvent": {
+      "title": "AMML Event",
+      "description": "Raw ingest event from AMML ingestion pipeline",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "eventType": { "type": "string" },
+        "zoneId": { "type": "string" },
+        "staffId": { "type": "string" },
+        "status": { "type": "string" },
+        "details": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "eventType", "zoneId", "status", "details"]
+    },
+    "AmmlDevice": {
+      "title": "AMML Device",
+      "description": "ZK ingestion or classifier device registration details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "zoneId": { "type": "string" },
+        "status": { "type": "string", "enum": ["ONLINE", "OFFLINE", "DEGRADED"] },
+        "ipAddress": { "type": "string" },
+        "firmware": { "type": "string" },
+        "lastSeen": { "type": "string", "format": "date-time" },
+        "ingestRate": { "type": "number" }
+      },
+      "required": ["id", "name", "zoneId", "status", "ipAddress", "firmware", "lastSeen"]
+    },
+    "AmmlMarket": {
+      "title": "AMML Market",
+      "description": "Active asset or node market indicators",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "change24h": { "type": "number" },
+        "volume": { "type": "number" },
+        "liquidity": { "type": "string" },
+        "status": { "type": "string", "enum": ["ACTIVE", "SUSPENDED", "HALTED"] }
+      },
+      "required": ["id", "name", "price", "change24h", "volume", "status"]
+    },
+    "AmmlAttendance": {
+      "title": "AMML Attendance",
+      "description": "Active staff check-in records",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "staffId": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "checkInTime": { "type": "string", "format": "date-time" },
+        "zoneId": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "staffId", "name", "role", "checkInTime", "status"]
+    },
+    "AmmlZoneLoad": {
+      "title": "AMML Zone Load",
+      "description": "Current real-time network load per zone node",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "zoneId": { "type": "string" },
+        "name": { "type": "string" },
+        "load": { "type": "number" },
+        "deviceCount": { "type": "integer" },
+        "status": { "type": "string" },
+        "hotSpot": { "type": "boolean" }
+      },
+      "required": ["id", "zoneId", "name", "load", "deviceCount", "status", "hotSpot"]
+    },
+    "AmmlTelemetryLog": {
+      "title": "AMML Telemetry Log",
+      "description": "Persistent cryptographic telemetry event logs for post-incident reviews",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "type": { "type": "string", "enum": ["INFO", "SUCCESS", "WARN", "CRITICAL"] },
+        "module": { "type": "string" },
+        "message": { "type": "string" },
+        "signature": { "type": "string" },
+        "nodeId": { "type": "string" },
+        "latencyMs": { "type": "number" },
+        "bandwidthKbps": { "type": "number" }
+      },
+      "required": ["timestamp", "type", "module", "message"]
+    }
+  },
+  "firestore": {
+    "events": {
+      "schema": "AmmlEvent",
+      "description": "Real-time ingested classification events"
+    },
+    "devices": {
+      "schema": "AmmlDevice",
+      "description": "Ingest and ZK classification devices"
+    },
+    "markets": {
+      "schema": "AmmlMarket",
+      "description": "Asset or execution node markets"
+    },
+    "attendance": {
+      "schema": "AmmlAttendance",
+      "description": "Staff attendance and roster statuses"
+    },
+    "zones": {
+      "schema": "AmmlZoneLoad",
+      "description": "Active zone load parameters for diagrammatic network nodes"
+    },
+    "telemetry_logs": {
+      "schema": "AmmlTelemetryLog",
+      "description": "Session-based telemetry log history"
+    }
+  }
+}

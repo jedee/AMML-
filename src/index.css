@@ -1,0 +1,129 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+:root {
+  /* High-contrast, polished Light Theme Design Tokens */
+  --amml-bg: #F8FAFC;         /* Light slate canvas bg */
+  --amml-surface: #FFFFFF;    /* White Card/Panel background */
+  --amml-surface2: #F1F5F9;   /* Inset tables/header background */
+  --amml-surface3: #E2E8F0;   /* Interactive hover / active pills */
+  --amml-border: #CBD5E1;     /* Crisp border dividers */
+  
+  --amml-text: #0F172A;       /* Primary crisp slate text (AAA contrast) */
+  --amml-text2: #334155;      /* Secondary detail labels */
+  --amml-text3: #64748B;      /* Muted metadata */
+
+  --amml-page: #F8FAFC;
+  --amml-panel: #FFFFFF;
+  --amml-ink: #F1F5F9;
+  --amml-line: #E2E8F0;
+  --amml-muted: #64748B;
+  --amml-green-2: #DCFCE7;
+}
+
+.dark, [data-theme="dark"] {
+  /* High-contrast, sleek Dark Theme Design Tokens */
+  --amml-bg: #070E17;         /* Deep rich dark canvas */
+  --amml-surface: #0F172A;    /* Dark card & panel background */
+  --amml-surface2: #0B1120;   /* Inset table / dark sub-panel */
+  --amml-surface3: #1E293B;   /* Hover, active state, highlighted pills */
+  --amml-border: #1E293B;     /* Crisp dark border lines */
+  
+  --amml-text: #F8FAFC;       /* Crisp white primary text */
+  --amml-text2: #E2E8F0;      /* Secondary text */
+  --amml-text3: #94A3B8;      /* Muted metadata */
+
+  --amml-page: #070E17;
+  --amml-panel: #0F172A;
+  --amml-ink: #0B1120;
+  --amml-line: #1E293B;
+  --amml-muted: #94A3B8;
+  --amml-green-2: #064E3B;
+}
+
+@theme {
+  --color-amml-blue: #0064B4;
+  --color-amml-blue-dk: #00508C;
+  --color-amml-blue-dkr: #003C78;
+  --color-amml-orange: #DC6400;
+  --color-amml-orange-lt: #E8821A;
+  --color-amml-green: #288C28;
+  --color-amml-green-lt: #3A9E4A;
+  --color-amml-navy: #000028;
+  
+  /* Light theme content view variables */
+  --color-amml-bg: var(--amml-bg);
+  --color-amml-surface: var(--amml-surface);
+  --color-amml-surface2: var(--amml-surface2);
+  --color-amml-surface3: var(--amml-surface3);
+  --color-amml-border: var(--amml-border);
+  --color-amml-text: var(--amml-text);
+  --color-amml-text2: var(--amml-text2);
+  --color-amml-text3: var(--amml-text3);
+
+  /* Elegant professional AMML corporate dark/light contrast theme layout variables */
+  --color-amml-page: var(--amml-page);
+  --color-amml-panel: var(--amml-panel);
+  --color-amml-ink: var(--amml-ink);
+  --color-amml-line: var(--amml-line);
+  --color-amml-muted: var(--amml-muted);
+  --color-amml-green-2: var(--amml-green-2);
+
+  --color-ai-purple: #7C3AED;
+  --color-ai-purple-lt: #A855F7;
+  --color-ai-pink: #EC4899;
+
+  --font-sans: "Outfit", "Inter", sans-serif;
+  --font-serif: "Libre Baskerville", "Georgia", serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  --animate-stage-wake: stageWake 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes stageWake {
+  0% { transform: translateY(12px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #0064B4;
+  border-radius: 99px;
+  opacity: 0.4;
+}
+
+/* Global Page Base Setup */
+body {
+  background-color: var(--color-amml-bg);
+  color: var(--color-amml-text);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}
+
+/* Transitions for fluid theme swaps change */
+*, *::before, *::after {
+  transition: background-color 0.3s ease-in-out, border-color 0.3s ease-in-out, color 0.3s ease-in-out;
+}
+/* Prevent transition flicker on charts, maps, or interactive canvas items */
+canvas, svg, img, .motion-div, iframe {
+  transition: none !important;
+}
+
+/* Print Styles */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+  }
+}

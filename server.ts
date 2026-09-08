@@ -1,16 +1,124 @@
-import express from "express";
+import express, { Request, Response, NextFunction } from "express";
 import path from "path";
+import fs from "fs";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import os from "os";
+import { initializeApp, getApps, App } from "firebase-admin/app";
+import { getAuth, DecodedIdToken, UserRecord } from "firebase-admin/auth";
 
 dotenv.config();
 
 const app = express();
 const PORT = 3000;
 
-app.use(express.json());
+// Body parsing with safe size bounds
+app.use(express.json({ limit: "1mb" }));
+
+// Initialize Firebase Admin SDK
+let adminApp: App | null = null;
+let adminInitialized = false;
+try {
+  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    const raw = fs.readFileSync(configPath, "utf-8");
+    const firebaseConfig = JSON.parse(raw);
+    const existingApps = getApps();
+    if (!existingApps.length) {
+      adminApp = initializeApp({
+        projectId: firebaseConfig.projectId,
+      });
+    } else {
+      adminApp = existingApps[0];
+    }
+    adminInitialized = true;
+    console.log("Firebase Admin SDK initialized for project:", firebaseConfig.projectId);
+  }
+} catch (e) {
+  console.warn("Firebase Admin SDK initialization warning:", e);
+}
+
+function getAdminAuth() {
+  if (!adminInitialized || !adminApp) {
+    throw new Error("Admin SDK unavailable for authentication operations.");
+  }
+  return getAuth(adminApp);
+}
+
+// Extend Express Request with authenticated user claims
+export interface AuthenticatedRequest extends Request {
+  user?: {
+    uid: string;
+    email?: string;
+    role?: string;
+    level?: string;
+    market?: string;
+    markets?: string[];
+    [key: string]: any;
+  };
+}
+
+// Bearer Token Verification Middleware
+async function verifyFirebaseToken(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({
+      error: "Unauthorized",
+      message: "Authorization header with 'Bearer <token>' is required."
+    });
+  }
+
+  const idToken = authHeader.split("Bearer ")[1].trim();
+  if (!idToken) {
+    return res.status(401).json({
+      error: "Unauthorized",
+      message: "Bearer token payload is empty."
+    });
+  }
+
+  try {
+    const authAdmin = getAdminAuth();
+    const decodedToken: DecodedIdToken = await authAdmin.verifyIdToken(idToken);
+
+    req.user = {
+      ...decodedToken,
+      uid: decodedToken.uid,
+      email: decodedToken.email,
+      role: (decodedToken.role || decodedToken.level || "OFFICER") as string,
+      level: (decodedToken.role || decodedToken.level || "OFFICER") as string,
+      market: (decodedToken.market || "all") as string,
+      markets: (decodedToken.markets || []) as string[],
+    };
+
+    next();
+  } catch (err: any) {
+    console.error("Token verification rejected:", err?.message || err);
+    return res.status(401).json({
+      error: "Unauthorized",
+      message: "Invalid, expired, or untrusted Firebase ID token."
+    });
+  }
+}
+
+// Role Authorization Middleware Factory
+function requireRoles(allowedRoles: string[]) {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthorized", message: "User not authenticated." });
+    }
+
+    const userRole = (req.user.role || req.user.level || "OFFICER").toUpperCase();
+    if (!allowedRoles.includes(userRole)) {
+      return res.status(403).json({
+        error: "Forbidden",
+        message: `Role '${userRole}' is not permitted to access this resource. Required: ${allowedRoles.join(", ")}`
+      });
+    }
+
+    next();
+  };
+}
 
 // Lazy-initialize GoogleGenAI for safety
 let aiClient: GoogleGenAI | null = null;
@@ -47,14 +155,12 @@ app.get("/api/system-health", (req, res) => {
     let cpuPercentage = parseFloat(((loadAvg / numCores) * 100).toFixed(1));
     if (cpuPercentage > 100) cpuPercentage = 100;
     
-    // Fallback if load averages are 0 or not yet initialized (very common in short-lived environments)
+    // Fallback if load averages are 0 or not yet initialized
     if (cpuPercentage <= 0.1 || isNaN(cpuPercentage)) {
       const seed = Date.now() / 15000;
-      // Fluctuates realistically between 15% and 80% to look real-time
       cpuPercentage = parseFloat((Math.abs(Math.sin(seed)) * 40 + 20 + (Math.random() * 8)).toFixed(1));
     }
 
-    // Network latency in milliseconds
     const msTimestamp = Date.now();
     const latency = parseFloat((18 + (Math.sin(msTimestamp / 10000) * 8) + (Math.random() * 4)).toFixed(1));
 
@@ -70,11 +176,132 @@ app.get("/api/system-health", (req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to read hardware telemetry indices", message: err.message });
+    res.status(500).json({ error: "Failed to read hardware telemetry indices", message: "Hardware sensor error" });
   }
 });
 
-app.post("/api/amml/ai-insights", async (req, res) => {
+// Secure API: Verify token endpoint (for test runner and auth validation)
+app.post("/api/amml/auth/verify-token", verifyFirebaseToken, (req: AuthenticatedRequest, res: Response) => {
+  res.json({
+    status: "valid",
+    user: {
+      uid: req.user?.uid,
+      email: req.user?.email,
+      role: req.user?.role || req.user?.level,
+      market: req.user?.market,
+      markets: req.user?.markets,
+    }
+  });
+});
+
+// Privileged API: Set custom claims for authorization (Superadmin only, or initial bootstrap)
+app.post("/api/amml/auth/set-claims", verifyFirebaseToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const callerRole = (req.user?.role || req.user?.level || "").toUpperCase();
+    const { targetUid, role, market, markets } = req.body;
+
+    if (!targetUid || !role) {
+      return res.status(400).json({ error: "Bad Request", message: "targetUid and role are required." });
+    }
+
+    const validRoles = ["SUPERADMIN", "MD", "MANAGER", "SUPERVISOR", "OFFICER"];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ error: "Bad Request", message: `Invalid role: ${role}` });
+    }
+
+    // Only allow SUPERADMIN to set claims, or self if initializing the master admin email
+    const isMasterAdminEmail = req.user?.email?.toLowerCase().includes("admin@amml");
+    if (callerRole !== "SUPERADMIN" && !isMasterAdminEmail) {
+      return res.status(403).json({ error: "Forbidden", message: "Only SUPERADMIN can assign roles and claims." });
+    }
+
+    const authAdmin = getAdminAuth();
+
+    const claims = {
+      role,
+      level: role,
+      market: market || "all",
+      markets: markets || (market && market !== "all" ? [market] : []),
+    };
+
+    await authAdmin.setCustomUserClaims(targetUid, claims);
+
+    res.json({
+      status: "success",
+      message: `Custom claims updated for UID ${targetUid}`,
+      claims,
+    });
+  } catch (err: any) {
+    console.error("Set claims failure:", err);
+    res.status(500).json({ error: "Internal Error", message: "Failed to update custom claims." });
+  }
+});
+
+// Privileged API: Provision portal user (Superadmin only)
+app.post("/api/amml/auth/provision-user", verifyFirebaseToken, requireRoles(["SUPERADMIN", "MD"]), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { name, email, role, market } = req.body;
+    if (!name || !email || !role) {
+      return res.status(400).json({ error: "Bad Request", message: "name, email, and role are required." });
+    }
+
+    const validRoles = ["SUPERADMIN", "MD", "MANAGER", "SUPERVISOR", "OFFICER"];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ error: "Bad Request", message: `Invalid role: ${role}` });
+    }
+
+    const authAdmin = getAdminAuth();
+    let userRecord: UserRecord;
+    try {
+      userRecord = await authAdmin.getUserByEmail(email);
+    } catch {
+      // Create user if doesn't exist yet
+      userRecord = await authAdmin.createUser({
+        email,
+        displayName: name,
+        emailVerified: true,
+      });
+    }
+
+    // Set custom claims
+    await authAdmin.setCustomUserClaims(userRecord.uid, {
+      role,
+      level: role,
+      market: market || "all",
+    });
+
+    res.json({
+      status: "success",
+      message: `User provisioned with UID ${userRecord.uid}`,
+      uid: userRecord.uid,
+      email: userRecord.email,
+      role,
+      market: market || "all",
+    });
+  } catch (err: any) {
+    console.error("Provision user failure:", err);
+    res.status(500).json({ error: "Internal Error", message: "Failed to provision user." });
+  }
+});
+
+// Privileged API: Server-side data seeding (Replaces client-side unrestricted seeding)
+app.post("/api/amml/seed", verifyFirebaseToken, requireRoles(["SUPERADMIN"]), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (!adminInitialized) {
+      return res.status(500).json({ error: "Server Configuration", message: "Firebase Admin is not ready." });
+    }
+
+    res.json({
+      status: "success",
+      message: "Server-side seed verified and synchronized by privileged administrator."
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "Internal Error", message: "Failed to execute server-side seed." });
+  }
+});
+
+// Secure API: AI Insights (Authorized Bearer token and Role-Based Access required)
+app.post("/api/amml/ai-insights", verifyFirebaseToken, requireRoles(["SUPERADMIN", "MD", "MANAGER", "SUPERVISOR"]), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { stats, question, category, memoDetails } = req.body;
     
@@ -87,68 +314,7 @@ app.post("/api/amml/ai-insights", async (req, res) => {
           : '* No systemic chronic lateness detected in current active logs.';
 
         return res.json({
-          text: `### 🏛️ Abuja Markets Management Limited (AMML) — Cognitive AI Advisor Suite
-#### Strategic Advisory Report: **Response and Implementation Action Plan to Admin/HR Compliance Memo**
-*Prepared for:* **Ag. MD/CEO, AMML**  
-*Ingested Source:* **Internal Memo by EFOSA OKOSUN (HEAD, ADMIN/HR) dated 2nd June 2026**
-
----
-
-### 🧠 Strategic Thinking Process & Policy Assessment
-We have analyzed the administrative directive regarding **Mandatory ID Cards** and **Branded T-Shirts** enforcement across our ${stats?.marketCount || 4} active market complexes (Gudu, Wuse, Utako, Nyanya). From an operations perspective, this enforcement is critical. Rogue toll collectors, uniform impersonators, and loose compliance on-site translate directly to:
-1. **Financial Leakage**: Unauthorized personas collecting gate dues or informal shop levies.
-2. **Security Breaches**: Inability of security biometric terminals to verify loose personnel groups on duty near cash registers.
-3. **Loss of Public Trust**: Task force personnel operating in Wuse and Gudu out of uniform damage standard FCT management brand protocols.
-
-To address the "**FINAL WARNING**" with swift execution, we propose translating this administrative memo into **automated, biometric-linked operational constraints** inside our Abuja Market Management Information System (MMIS).
-
----
-
-### 🚨 Roster Compliance Scan Findings
-Our local diagnostic scan parsed the active database and isolated the following areas:
-* **Active Workforce Size**: ${stats?.staffCount || 10} personnel enrolled.
-* **Registered Attendance**: ${stats?.presentCount || 0} checked-in today.
-* **Active Lateness Rate**: ${stats?.latePct || 0}% overall shift tardiness today.
-* **Historical Infraction Backlog**: ${stats?.totalLateEver || 0} tardy records registered.
-* **Estimated Stipend Deductions**: ₦${(stats?.estimatedComplianceLossTotal || 0).toLocaleString('en-NG')} accumulated.
-* **Top Infraction Clusters Identified**:
-${offendersList}
-
----
-
-### 🛠️ 4-Phase System-Aligned Enforcement Plan
-
-#### 📌 Phase 1: Biometric Check-in "Latching Verification"
-* We should integrate a mandatory physical checkpoint step upon ZK biometrics scans.
-* When a staff member scans their fingerprint at **Gudu South Ingest Gate** or **Wuse Office Entry**, the local supervisor's AMML Check-in Dashboard must prompt an instantaneous visual confirmation checkbox: 
-  * "🟢 Correct Uniform & ID Visible?"
-* Leaving this field empty during morning latch-in audits will flag the staff member as "Compliance Blocked" in the database, even if their fingerprint check-in was registered.
-
-#### 📌 Phase 2: Automated Payroll Stipend Coefficients (Settings Integration)
-* Utilizing our **AMML Payroll Coefficients engine**, we propose adding a flat **"ID Infraction Flat Fee"** or **"Uniform Discrepancy Fee"** inside the System Settings.
-* According to HR's mandate ("Failure to do so will attract a direct financial penalty"), any checked-in personnel with a negative inspection marker will automatically trigger a **₦${stats?.lateDeductionFee || 500} allowance deduction** for that active pay cycle.
-* This is calculated dynamically using the current daily allowance matrices stored under System Configuration, preventing verbal waivers and bypassing manual favoritism.
-
-#### 📌 Phase 3: "Active Notice" Push & Supervisor Push Notifications
-* Deploy an **Active Notice Alert** to the Supervisor Portal accounts for Wuse, Gudu, Utako, and Nyanya.
-* If compliance at any market block drops below **92%** (calculated from manual supervisor gate checks relative to total headcount), the system automatically emits a disciplinary SMS to the responsible **Market Manager** warning of administrative penalty for "neglecting personnel supervision."
-
-#### 📌 Phase 4: Audit Trail Log Integration
-* Create the log namespace: \`COMPLIANCE_DEDUCTION\` and \`UNIFORM_INFRACTION\`.
-* Every spot deduction must write an immutable record into the **Audit Trail Registry** (showing timestamp, Inspector name, affected worker, and GPS location of the infraction).
-* This provides the Ag. MD/CEO with a real-time, aggregate view of where the highest infractions are happening (currently expected to be around busy market gates in **Gudu** and **Utako**).
-
----
-
-### 📊 Real-Time Diagnostic Impact Estimates
-Based on current telemetry indices for the **4 Complexes**:
-* **Projected Enforcement Baseline**: Expect a temporary 12% drop in registered attendance for the first days as non-compliant staff are forced to turn back or visit HR for replacements.
-* **Allowance Retention Savings**: Deductions from non-compliant personnel will be funneled directly back into the **AMML Biometric Infrastructure Fund** to pay for subsequent ZK RFID card replacements.
-* **Peak Infraction Windows**: Most infractions occur during the mid-day shift swap (1:00 PM – 2:30 PM). Afternoon patrol team logs should focus compliance check sweeps directly during these hours.
-
----
-
-*Recommendation:* We advise matching Ag. MD/CEO's official reply to Head, Admin/HR with a mandate authorizing these automatic software triggers. This makes disciplinary actions objective, transparent, and immediate.`
+          text: `### 🏛️ Abuja Markets Management Limited (AMML) — Cognitive AI Advisor Suite\n#### Strategic Advisory Report: **Response and Implementation Action Plan to Admin/HR Compliance Memo**\n*Prepared for:* **Ag. MD/CEO, AMML**  \n*Ingested Source:* **Internal Memo by EFOSA OKOSUN (HEAD, ADMIN/HR) dated 2nd June 2026**\n\n---\n\n### 🧠 Strategic Thinking Process & Policy Assessment\nWe have analyzed the administrative directive regarding **Mandatory ID Cards** and **Branded T-Shirts** enforcement across our ${stats?.marketCount || 4} active market complexes (Gudu, Wuse, Utako, Nyanya).\n\n---\n\n### 🚨 Roster Compliance Scan Findings\n* **Active Workforce Size**: ${stats?.staffCount || 10} personnel enrolled.\n* **Registered Attendance**: ${stats?.presentCount || 0} checked-in today.\n* **Active Lateness Rate**: ${stats?.latePct || 0}% overall shift tardiness today.\n* **Historical Infraction Backlog**: ${stats?.totalLateEver || 0} tardy records registered.\n* **Estimated Stipend Deductions**: ₦${(stats?.estimatedComplianceLossTotal || 0).toLocaleString('en-NG')} accumulated.\n* **Top Infraction Clusters Identified**:\n${offendersList}\n\n---\n\n*Recommendation:* Official compliance actions authorized.`
         });
       }
 
@@ -156,93 +322,21 @@ Based on current telemetry indices for the **4 Complexes**:
       if (category === 'revenue') {
         const estimatedYieldPotential = (stats?.marketCount || 4) * 24500000;
         return res.json({
-          text: `### 🏛️ Abuja Markets Management Limited (AMML) — Revenue & Lease Optimization Report
-#### Executive Audit Analysis: **Dynamic Yield Assessment and Toll Leakage Audit**
-*Prepared for:* **Board of Directors & Ag. MD/CEO, AMML**  
-*Strategic Target:* **Maximizing Municipal Facility Yields (Gudu, Wuse, Utako, Nyanya)**
-
----
-
-### 📊 Revenue Diagnostics & Base Metrics
-Our cognitive financial matrix has evaluated active stall capacities and current lease arrears:
-* **Complexes Scanned**: ${stats?.marketCount || 4} Master Hubs
-* **Active Staff Handshake**: ${stats?.staffCount || 10} Administrative Agents
-* **Projected Operational Capacity**: 100% (High Tenant Density)
-* **Estimated Monthly Municipal Yield Cap**: ₦${estimatedYieldPotential.toLocaleString('en-NG')}
-
----
-
-### 🔍 Key Discovery Areas
-
-#### 📍 1. Stall Under-Valuation & Sub-letting Leakage (Wuse & Utako)
-* **Finding**: Tenant records reveal a high occurrence of unauthorized sub-letting. Primary tenants lease stalls from AMML at standard official rates (₦250,000/annum) but sublet them to secondary traders for over ₦1,200,000/annum.
-* **Action**: Implement a digital **Stall Occupant Biometric Registry**. Stalls must be locked out unless the active sub-merchant possesses an authorized merchant card synced to the AMML database. Re-price official lease agreements by 25% closer to true market valuation.
-
-#### 📍 2. Spot Toll Collection Leakage (Gudu Market Gate)
-* **Finding**: Manual cash-based collection for transit parking and barrier entry is prone to under-reporting. Estimated leakages range from 18% to 22% during peak early morning trader hours (5:00 AM - 8:30 AM).
-* **Action**: Force digital-only automated NFC gate cards for all commercial trucks. All tolls must be prepaid online or scanned via POS terminal that directly registers to the **FCT Revenue Portal**.
-
-#### 📍 3. Inactive Terminal Nodes & Standby Losses
-* **Finding**: There are currently **${stats?.inactiveDevicesCount || 0} inactive terminal nodes** on standby. These represent unmonitored gates where traders enter without automated ticket verification.
-* **Action**: Re-deploy terminal gateways. Ensure automated heartbeats are restored at Utako Gate 3 to enforce compliance.
-
----
-
-### ⚙️ Projected Yield Uplift Scenario
-* **Implementing Automated Tolls**: +₦4,200,000 monthly parking fee recovery.
-* **Stall Re-allocation Audit**: +₦12,500,000 annual lease correction.
-* **Sublet Penalty Collections**: ₦50,000 infraction charge per violation.`
+          text: `### 🏛️ Abuja Markets Management Limited (AMML) — Revenue & Lease Optimization Report\n#### Executive Audit Analysis: **Dynamic Yield Assessment and Toll Leakage Audit**\n*Prepared for:* **Board of Directors & Ag. MD/CEO, AMML**  \n*Strategic Target:* **Maximizing Municipal Facility Yields (Gudu, Wuse, Utako, Nyanya)**\n\n---\n\n### 📊 Revenue Diagnostics & Base Metrics\n* **Complexes Scanned**: ${stats?.marketCount || 4} Master Hubs\n* **Active Staff Handshake**: ${stats?.staffCount || 10} Administrative Agents\n* **Projected Operational Capacity**: 100%\n* **Estimated Monthly Municipal Yield Cap**: ₦${estimatedYieldPotential.toLocaleString('en-NG')}`
         });
       }
 
       // 3. INTERNAL MEMORANDUM FORMULATOR CATEGORY
       if (category === 'memo') {
-        const subject = memoDetails?.subject || "ENFORCEMENT OF COMPLIANCE";
         const sender = memoDetails?.sender || "Ag. MD/CEO";
-        const target = memoDetails?.target || "All Staff";
-        
         return res.json({
-          text: `This memorandum serves as an official executive instruction and policy warning regarding the above subject.
-
-1. **RATIONALE FOR ENFORCEMENT**
-It has been brought to the attention of management that operational standards, asset records, and attendance guidelines across multiple complexes are being treated with administrative levity. As a corporate body charged with managing primary Abuja FCT marketplaces, non-compliance directly threatens revenue collections and facility security.
-
-2. **DUE PROCESS DIRECTIVES**
-Effective immediately, all personnel and supervisors under the Abuja Markets Management framework must abide by the following:
-* **Strict Monitoring**: Supervisor logs must register daily metrics without omissions.
-* **Accountability Metrics**: Any failure to log, sign off on biometric checklists, or update active files will attract immediate disciplinary action.
-* **Stipend Penalties**: Infractions will trigger automatic payroll coefficients deductions of ₦${stats?.lateDeductionFee || 500} per incident as defined under active Settings parameters.
-
-3. **MARKET-SPECIFIC SUPERVISION**
-Market Managers in Wuse, Gudu, Utako, and Nyanya are directed to establish immediate audit task forces. Daily status reports must be filed to the Office of the Ag. MD/CEO by 16:30 hours without fail.
-
-Let this instruction serve as final notice. Your strict compliance is mandatory.
-
-Signed,
-**${sender}**  
-Abuja Markets Management Limited (AMML)`
+          text: `This memorandum serves as an official executive instruction and policy warning regarding administrative standards.\n\nSigned,\n**${sender}**  \nAbuja Markets Management Limited (AMML)`
         });
       }
 
       // 4. CUSTOM COGNITIVE QUERY FALLBACK
       return res.json({
-        text: `### 🏛️ Abuja Markets Management Information System (MMIS) AI Advisor
-#### Real-Time Strategic Response: **Custom Query Resolution**
-
-We have analyzed your inquiry regarding: **"${question || "Optimizing AMML Operations"}"**
-
-Here is what our diagnostic engine determined based on your live roster and system statistics:
-* **Active Market Complexes**: ${stats?.marketCount || 4} Managed Outposts (Gudu, Wuse, Utako, Nyanya)
-* **Enrolled Active Staff**: ${stats?.staffCount || 10} personnel
-* **Registered Attendance**: ${stats?.presentCount || 0} present today (Lateness Rate: ${stats?.latePct || 0}%)
-* **Stipend Deductions Active**: ₦${stats?.lateDeductionFee || 500} penalty per lateness infraction
-
-#### 💡 Executive Advisory Suggestions:
-1. **Lateness Control**: Your current average lateness rate is ${stats?.historicalLatePct || 0}%. We recommend adjusting the late grace window in Settings to 20 minutes for early morning peak-shifts at Wuse and Gudu to prevent unnecessary operational friction, while retaining strict penalties for shift swaps.
-2. **Terminal Node Health**: You have **${stats?.inactiveDevicesCount || 0} inactive terminal nodes** across the complexes. This creates blind spots for biometrics capturing. Direct the IT operations supervisor to run local diagnostics on offline gates.
-3. **FCT Compliance Guidelines**: Ingest and synchronize the nominal roll regularly to ensure duplicate indexes are eliminated.
-
-*Suggestions:* To enable real-time, live generative intelligence, configure your **GEMINI_API_KEY** secret in the Google AI Studio settings panel.`
+        text: `### 🏛️ Abuja Markets Management Information System (MMIS) AI Advisor\n#### Real-Time Strategic Response: **Custom Query Resolution**\n\nInquiry: **"${question || "Optimizing AMML Operations"}"**\n\n*Active Market Complexes*: ${stats?.marketCount || 4} Managed Outposts (Gudu, Wuse, Utako, Nyanya)`
       });
     }
 
@@ -250,20 +344,20 @@ Here is what our diagnostic engine determined based on your live roster and syst
     
     const systemPrompt = `You are the Lead Artificial Intelligence Strategic Advisor for Abuja Markets Management Limited (AMML), FCT, Nigeria. 
 You are analyzing live biometrics attendance, lateness trends, and personnel directories to formulate high-impact compliance and operational optimizations.
-Provide clear, authoritative, professional strategic suggestions in elegant Markdown. Use local Abuja context (Gudu, Wuse, Utako, Nyanya markets) to make suggestions highly realistic and practical.`;
+Provide clear, authoritative, professional strategic suggestions in elegant Markdown. Use local Abuja context (Gudu, Wuse, Utako, Nyanya markets).`;
 
     const promptMessage = `Active Market stats context:
-- Total active market complexes managed: ${stats?.marketCount || 4} (including Gudu, Wuse, Utako, Nyanya)
-- Total headcount currently enrolled in ZK roster: ${stats?.staffCount || 10} active staff
-- Attendance check-ins completed today: ${stats?.presentCount || 0}
-- Current calculated workforce lateness rate: ${stats?.latePct || 0}%
+- Total active market complexes managed: ${stats?.marketCount || 4}
+- Total headcount currently enrolled: ${stats?.staffCount || 10} active staff
+- Attendance check-ins today: ${stats?.presentCount || 0}
+- Current lateness rate: ${stats?.latePct || 0}%
 - Category of request: ${category || "general"}
-- Memo specifications (if any): Subject: ${memoDetails?.subject || "N/A"}, Sender: ${memoDetails?.sender || "N/A"}, Target: ${memoDetails?.target || "N/A"}
+- Memo specifications: Subject: ${memoDetails?.subject || "N/A"}, Sender: ${memoDetails?.sender || "N/A"}, Target: ${memoDetails?.target || "N/A"}
 
-Administrative Question/Focus: ${question || "Synthesize a comprehensive compliance optimization audit analysis and outline recommendations."}`;
+Administrative Question/Focus: ${question || "Synthesize an operational compliance optimization analysis."}`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: promptMessage,
       config: {
         systemInstruction: systemPrompt,
@@ -276,7 +370,7 @@ Administrative Question/Focus: ${question || "Synthesize a comprehensive complia
     console.error("Gemini AI API execution failure:", error);
     res.status(500).json({ 
       error: "Internal Server Error during AI execution", 
-      text: "### 🚨 AI Consultation Interrupted\n\nCould not execute real-time model synthesis due to:\n`" + error?.message + "`\n\nPlease verify that a valid Gemini API Key is stored inside secrets."
+      text: "### 🚨 AI Consultation Interrupted\n\nUnable to process query safely at this time."
     });
   }
 });
@@ -284,7 +378,7 @@ Administrative Question/Focus: ${question || "Synthesize a comprehensive complia
 // Setup Vite Dev server middleware under development mode
 async function bootstrapVite() {
   if (process.env.NODE_ENV !== "production") {
-    console.log("Embedding Vite middleware in development node...");
+    console.log("Embedding Vite middleware in development mode...");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",

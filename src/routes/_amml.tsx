@@ -11,15 +11,26 @@ export const Route = createRoute({
 });
 
 function AmmlLayoutComponent() {
-  const { session } = useAmmlStore();
+  const { session, isAuthReady } = useAmmlStore();
   const navigate = useNavigate();
 
-  // Guard routing - redirect to /login if no valid session
+  // Guard routing - redirect to /login only when auth is resolved and no valid session
   useEffect(() => {
-    if (!session) {
+    if (isAuthReady && !session) {
       navigate({ to: '/login' });
     }
-  }, [session, navigate]);
+  }, [session, isAuthReady, navigate]);
+
+  if (!isAuthReady) {
+    return (
+      <div className="min-h-screen bg-amml-bg flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-3 border-amml-blue border-t-transparent rounded-full animate-spin" />
+          <span className="text-xs font-mono text-amml-text3 tracking-wider">Verifying AMML Security Session...</span>
+        </div>
+      </div>
+    );
+  }
 
   if (!session) return null;
 

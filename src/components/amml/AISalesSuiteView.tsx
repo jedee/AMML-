@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAmmlStore } from '../../lib/amml/store';
+import { getAuthBearerToken } from '../../lib/amml/firebase';
 import { 
   Brain, Send, Loader2, Zap, ShieldCheck, AlertTriangle, FileText, 
   HelpCircle, Sparkles, Clipboard, Users, Building, DollarSign,
@@ -98,9 +99,13 @@ export const AISalesSuiteView: React.FC = () => {
     };
 
     try {
+      const authToken = await getAuthBearerToken();
       const response = await fetch('/api/amml/ai-insights', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+        },
         body: JSON.stringify({
           stats: statsPayload,
           question: textPrompt,

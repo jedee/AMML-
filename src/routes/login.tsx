@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { createRoute, useNavigate } from '@tanstack/react-router';
 import { Route as RootRoute } from './__root';
 import { useAmmlStore } from '../lib/amml/store';
 import { AmmlLogo } from '../components/amml/AmmlLogo';
+import { Lock, Mail, User, ShieldCheck, Eye, EyeOff, Loader2, ArrowRight } from 'lucide-react';
 
 export const Route = createRoute({
   getParentRoute: () => RootRoute,
@@ -11,220 +12,240 @@ export const Route = createRoute({
 });
 
 function LoginRouteComponent() {
-  const { handleLoginSim, users } = useAmmlStore();
+  const { session, handleLogin, handleGoogleLogin, handleSignUp } = useAmmlStore();
   const navigate = useNavigate();
 
-  const [mode, setMode] = useState<'demo' | 'live'>('demo');
-  const [selectedRole, setSelectedRole] = useState<'SUPERADMIN' | 'MD' | 'MANAGER' | 'SUPERVISOR' | 'OFFICER'>('MD');
+  const [authMode, setAuthMode] = useState<'signin' | 'register'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [isVerifying, setIsVerifying] = useState(false);
+  const [fullName, setFullName] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [roleSelection, setRoleSelection] = useState<'OFFICER' | 'SUPERVISOR' | 'MANAGER'>('OFFICER');
 
-  const rolesList = [
-    {
-      role: 'SUPERADMIN' as const,
-      name: 'Super Administrator',
-      desc: 'System config · User management · All access',
-      badge: 'LEVEL 1',
-      badgeColor: 'rgba(74,20,140,.2)',
-      textColor: '#CE93D8',
-      icon: '👑',
-      defaultEmail: 'admin@amml.gov.ng'
-    },
-    {
-      role: 'MD' as const,
-      name: 'Managing Director',
-      desc: 'Executive view · Finance · Full reports',
-      badge: 'LEVEL 2',
-      badgeColor: 'rgba(0,60,120,.25)',
-      textColor: '#90CAF9',
-      icon: '🏛️',
-      defaultEmail: 'director@amml.gov.ng'
-    },
-    {
-      role: 'MANAGER' as const,
-      name: 'Head of Operations / Area Manager',
-      desc: 'Multi-market · Devices · Staff management',
-      badge: 'LEVEL 3',
-      badgeColor: 'rgba(0,100,180,.2)',
-      textColor: '#64B5F6',
-      icon: '⚙️',
-      defaultEmail: 'manager@amml.gov.ng'
-    },
-    {
-      role: 'SUPERVISOR' as const,
-      name: 'Market Supervisor / HR & Admin',
-      desc: 'Single market · Attendance · Staff records',
-      badge: 'LEVEL 4',
-      badgeColor: 'rgba(220,100,0,.2)',
-      textColor: '#FFB74D',
-      icon: '📋',
-      defaultEmail: 'supervisor@amml.gov.ng'
-    },
-    {
-      role: 'OFFICER' as const,
-      name: 'Market Officer / Field Staff',
-      desc: 'Clock in/out · My records · Notices',
-      badge: 'LEVEL 5',
-      badgeColor: 'rgba(40,140,40,.2)',
-      textColor: '#81C784',
-      icon: '👤',
-      defaultEmail: 'officer@amml.gov.ng'
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  // Navigate automatically once authenticated session is established
+  useEffect(() => {
+    if (session) {
+      navigate({ to: '/dashboard' });
     }
-  ];
+  }, [session, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-    setIsVerifying(true);
+    setIsProcessing(true);
 
     try {
-      let targetEmail = email;
-      let targetPass = password;
-
-      if (mode === 'demo') {
-        const matchingRole = rolesList.find(r => r.role === selectedRole);
-        targetEmail = matchingRole ? matchingRole.defaultEmail : 'director@amml.gov.ng';
-        // Password for demo seed accounts resides in mock/users (they match default passwords)
-        targetPass = selectedRole === 'SUPERADMIN' ? 'admin123' :
-                     selectedRole === 'MD' ? 'director123' :
-                     selectedRole === 'MANAGER' ? 'manager123' :
-                     selectedRole === 'SUPERVISOR' ? 'supervisor123' : 'officer123';
+      if (authMode === 'signin') {
+        if (!email.trim() || !password) {
+          throw new Error('Please enter both your official email and password.');
+        }
+        await handleLogin(email, password);
+      } else {
+        if (!fullName.trim() || !email.trim() || !password) {
+          throw new Error('Please complete all registration fields.');
+        }
+        if (password.length < 6) {
+          throw new Error('Password must be at least 6 characters in length.');
+        }
+        await handleSignUp(fullName, email, password, roleSelection, 'all');
       }
-
-      await handleLoginSim(targetEmail, selectedRole, targetPass);
       navigate({ to: '/dashboard' });
     } catch (err: any) {
-      setErrorMsg(err.message || 'Access Denied. Verification failed.');
+      setErrorMsg(err.message || 'Authentication failed. Please verify credentials.');
     } finally {
-      setIsVerifying(false);
+      setIsProcessing(false);
+    }
+  };
+
+  const handleGoogleSSO = async () => {
+    setErrorMsg(null);
+    setIsProcessing(true);
+    try {
+      await handleGoogleLogin();
+      navigate({ to: '/dashboard' });
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Google Workspace SSO verification was interrupted.');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#000018] via-[#00285a] to-[#001030] flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
-      <div className="w-full max-w-lg bg-white/5 backdrop-blur-xl border border-white/10 p-8 sm:p-10 rounded-[24px] shadow-[0_32px_80px_rgba(0,0,0,0.5)] flex flex-col my-8">
+      <div className="w-full max-w-md bg-white/5 backdrop-blur-2xl border border-white/10 p-7 sm:p-9 rounded-2xl shadow-2xl flex flex-col my-8">
         
-        {/* Reusable High-Fidelity AMML Logo */}
+        {/* AMML Official Logo & Header */}
         <div className="flex flex-col items-center mb-6">
           <AmmlLogo variant="full" size="lg" textColor="light" />
-          <div className="w-full h-px bg-white/10 my-5" />
-          <h2 className="text-xl sm:text-2xl font-sans font-black text-white tracking-tight text-center">Portal Authorization</h2>
-          <p className="text-white/45 text-xs text-center mt-1">Abuja Markets Management Information System</p>
+          <div className="w-full h-px bg-white/10 my-4" />
+          <h2 className="text-xl sm:text-2xl font-serif font-bold text-white tracking-tight text-center">
+            {authMode === 'signin' ? 'Portal Authentication' : 'Staff Account Registration'}
+          </h2>
+          <p className="text-white/50 text-xs text-center mt-1">
+            Abuja Markets Management Information System (MMIS)
+          </p>
         </div>
 
-        {/* Roles Level Grid (Demo mode select) */}
-        {mode === 'demo' && (
-          <div className="flex flex-col gap-2 mb-6">
-            {rolesList.map(r => (
-              <button
-                key={r.role}
-                type="button"
-                onClick={() => setSelectedRole(r.role)}
-                className={`flex items-center gap-4 text-left p-3.5 rounded-[12px] border transition-all duration-200 cursor-pointer ${
-                  selectedRole === r.role
-                    ? 'bg-amml-blue/20 border-amml-blue shadow-[0_0_12px_rgba(0,100,180,0.3)]'
-                    : 'bg-white/5 border-white/5 hover:bg-white/10 hover:border-white/10'
-                }`}
-              >
-                <div className="w-10 h-10 rounded-lg flex items-center justify-center text-lg shrink-0" style={{ backgroundColor: r.badgeColor }}>
-                  {r.icon}
-                </div>
-                <div className="flex-1">
-                  <div className="text-sm font-bold text-white">{r.name}</div>
-                  <div className="text-[11px] text-white/50 mt-0.5">{r.desc}</div>
-                </div>
-                <span className="text-[9px] font-extrabold tracking-wider px-2 py-1 rounded-full shrink-0" style={{ backgroundColor: r.badgeColor, color: r.textColor }}>
-                  {r.badge}
-                </span>
-              </button>
-            ))}
+        {/* Mode Switch Tabs */}
+        <div className="flex p-1 bg-black/30 border border-white/10 rounded-xl mb-5">
+          <button
+            type="button"
+            onClick={() => { setAuthMode('signin'); setErrorMsg(null); }}
+            className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+              authMode === 'signin' 
+                ? 'bg-amml-blue text-white shadow-sm' 
+                : 'text-white/60 hover:text-white'
+            }`}
+          >
+            Sign In
+          </button>
+          <button
+            type="button"
+            onClick={() => { setAuthMode('register'); setErrorMsg(null); }}
+            className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+              authMode === 'register' 
+                ? 'bg-amml-blue text-white shadow-sm' 
+                : 'text-white/60 hover:text-white'
+            }`}
+          >
+            Register Account
+          </button>
+        </div>
+
+        {/* Error notification */}
+        {errorMsg && (
+          <div className="bg-red-500/15 border border-red-500/30 text-red-200 text-xs p-3 rounded-xl mb-4 flex items-start gap-2">
+            <span className="text-base shrink-0">⚠️</span>
+            <span className="mt-0.5">{errorMsg}</span>
           </div>
         )}
 
-        {/* Real Live Inputs (Live mode) */}
-        {mode === 'live' && (
-          <div className="space-y-4 mb-6">
+        {/* Google Workspace SSO Button */}
+        <button
+          type="button"
+          onClick={handleGoogleSSO}
+          disabled={isProcessing}
+          className="w-full bg-white hover:bg-neutral-100 text-neutral-800 font-semibold py-2.5 px-4 rounded-xl text-xs sm:text-sm flex items-center justify-center gap-3 transition-all shadow-md cursor-pointer disabled:opacity-50 mb-4"
+        >
+          <svg className="w-4 h-4" viewBox="0 0 24 24">
+            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+          </svg>
+          <span>Sign in with Google Workspace SSO</span>
+        </button>
+
+        <div className="flex items-center gap-3 my-3">
+          <div className="flex-1 h-px bg-white/10" />
+          <span className="text-[11px] font-medium text-white/40 uppercase tracking-wider">Or official credentials</span>
+          <div className="flex-1 h-px bg-white/10" />
+        </div>
+
+        {/* Credentials Form */}
+        <form onSubmit={handleSubmit} className="space-y-4 mt-2">
+          {authMode === 'register' && (
             <div>
-              <label className="block text-[11px] font-bold tracking-wider text-white/50 uppercase mb-1.5">
-                Email Address
-              </label>
+              <label className="block text-xs font-medium text-white/70 mb-1">Full Legal Name</label>
+              <div className="relative">
+                <User className="absolute left-3 top-2.5 h-4 w-4 text-white/40" />
+                <input
+                  type="text"
+                  required
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="e.g. Efosa Okosun"
+                  className="w-full bg-white/5 border border-white/15 focus:border-amml-blue text-white pl-9 pr-3 py-2.5 rounded-xl text-sm transition-all outline-none"
+                />
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-medium text-white/70 mb-1">Official AMML Email</label>
+            <div className="relative">
+              <Mail className="absolute left-3 top-2.5 h-4 w-4 text-white/40" />
               <input
                 type="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin@amml.gov.ng"
-                className="w-full bg-white/5 border border-white/10 rounded-[8px] px-4 py-2.5 text-sm text-white placeholder-white/20 focus:outline-none focus:border-amml-blue focus:bg-amml-blue/10 transition-all font-sans"
+                placeholder="name@amml.gov.ng"
+                className="w-full bg-white/5 border border-white/15 focus:border-amml-blue text-white pl-9 pr-3 py-2.5 rounded-xl text-sm transition-all outline-none"
               />
             </div>
-            <div>
-              <label className="block text-[11px] font-bold tracking-wider text-white/50 uppercase mb-1.5">
-                Password
-              </label>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-white/70 mb-1">Password</label>
+            <div className="relative">
+              <Lock className="absolute left-3 top-2.5 h-4 w-4 text-white/40" />
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter account password"
-                className="w-full bg-white/5 border border-white/10 rounded-[8px] px-4 py-2.5 text-sm text-white placeholder-white/20 focus:outline-none focus:border-amml-blue focus:bg-amml-blue/10 transition-all font-sans"
+                placeholder="••••••••"
+                className="w-full bg-white/5 border border-white/15 focus:border-amml-blue text-white pl-9 pr-10 py-2.5 rounded-xl text-sm transition-all outline-none"
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-2.5 text-white/40 hover:text-white cursor-pointer p-0.5"
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
             </div>
           </div>
-        )}
 
-        {/* Demo Mode or Live Mode Switch Toggle */}
-        <div className="flex border border-white/15 rounded-lg overflow-hidden mb-6">
-          <button
-            type="button"
-            onClick={() => setMode('demo')}
-            className={`flex-1 py-2 text-xs font-bold leading-normal transition-all cursor-pointer ${
-              mode === 'demo' ? 'bg-amml-orange text-white' : 'bg-transparent text-white/45 hover:text-white'
-            }`}
-          >
-            🎭 Demo Mode
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('live')}
-            className={`flex-1 py-2 text-xs font-bold leading-normal transition-all cursor-pointer ${
-              mode === 'live' ? 'bg-amml-blue text-white' : 'bg-transparent text-white/45 hover:text-white'
-            }`}
-          >
-            🌐 Live (Backend)
-          </button>
-        </div>
+          {authMode === 'register' && (
+            <div>
+              <label className="block text-xs font-medium text-white/70 mb-1">Requested Role Scope</label>
+              <select
+                value={roleSelection}
+                onChange={(e) => setRoleSelection(e.target.value as any)}
+                className="w-full bg-neutral-900 border border-white/15 focus:border-amml-blue text-white px-3 py-2.5 rounded-xl text-sm outline-none cursor-pointer"
+              >
+                <option value="OFFICER">Market Officer (Clock-in, Personal log)</option>
+                <option value="SUPERVISOR">Market Supervisor (Attendance, Market Roster)</option>
+                <option value="MANAGER">Operations Manager (Multi-market, Devices)</option>
+              </select>
+            </div>
+          )}
 
-        {/* Error Dialog info */}
-        {errorMsg && (
-          <div className="bg-red-500/10 border border-red-500/20 px-4 py-3 rounded-lg text-xs font-sans text-red-300 mb-4 text-center">
-            ⚠️ {errorMsg}
-          </div>
-        )}
-
-        {/* Submit Gate Access Trigger */}
-        <form onSubmit={handleSubmit}>
           <button
             type="submit"
-            disabled={isVerifying}
-            className="w-full py-3.5 bg-gradient-to-r from-amml-blue to-amml-blue-dk border-none rounded-[12px] text-white font-sans font-extrabold text-sm sm:text-base tracking-wide uppercase hover:scale-[1.01] hover:-translate-y-0.5 active:scale-100 transition-all duration-200 cursor-pointer shadow-[0_4px_15px_rgba(0,100,180,0.35)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            disabled={isProcessing}
+            className="w-full bg-amml-blue hover:bg-amml-blue-dk text-white font-semibold py-2.5 px-4 rounded-xl text-sm flex items-center justify-center gap-2 transition-all shadow-lg cursor-pointer disabled:opacity-50 mt-2"
           >
-            {isVerifying ? (
+            {isProcessing ? (
               <>
-                <span className="animate-spin text-white">⚙️</span>
-                <span>AUTHENTICATING LEVEL...</span>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Authenticating with Firebase...</span>
               </>
             ) : (
-              <span>Access System →</span>
+              <>
+                <span>{authMode === 'signin' ? 'Access Secure Portal' : 'Register Account'}</span>
+                <ArrowRight className="h-4 w-4" />
+              </>
             )}
           </button>
         </form>
 
-        <p className="text-center text-white/20 text-[10px] mt-6 font-sans">
-          Abuja Markets Management Limited (AMML) • MMIS v2.0 • FCT Abuja
-        </p>
+        {/* Security & Regulatory Compliance Footer */}
+        <div className="mt-8 pt-4 border-t border-white/10 text-center">
+          <div className="flex items-center justify-center gap-1.5 text-[11px] text-white/50 mb-1">
+            <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
+            <span>FCTA Identity Governance & RBAC Enforced</span>
+          </div>
+          <p className="text-[10px] text-white/35 leading-tight">
+            Unauthorized access attempts are logged and monitored under the FCT Public Sector Information Security Regulations.
+          </p>
+        </div>
+
       </div>
     </div>
   );

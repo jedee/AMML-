@@ -1,59 +1,149 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Global safety net - Default deny all
+    // 1. Global Default Deny
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Helper functions
+    // 2. Authentication & Role Helpers
     function isSignedIn() {
       return request.auth != null;
+    }
+
+    function getUserRole() {
+      return request.auth.token.keys().hasAny(['role']) 
+        ? request.auth.token.role 
+        : (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.level
+            : 'OFFICER');
+    }
+
+    function getUserMarket() {
+      return request.auth.token.keys().hasAny(['market'])
+        ? request.auth.token.market
+        : (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.market
+            : 'all');
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && getUserRole() == 'SUPERADMIN';
+    }
+
+    function isMD() {
+      return isSignedIn() && (isSuperAdmin() || getUserRole() == 'MD');
+    }
+
+    function isManager() {
+      return isSignedIn() && (isMD() || getUserRole() == 'MANAGER');
+    }
+
+    function isSupervisor() {
+      return isSignedIn() && (isManager() || getUserRole() == 'SUPERVISOR');
+    }
+
+    function canAccessMarket(market) {
+      return isMD() || getUserMarket() == 'all' || getUserMarket() == market;
     }
 
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    // Rules matching
-    match /events/{eventId} {
-      allow read, write: if isSignedIn();
+    // 3. User Profiles & RBAC Identity
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isSupervisor());
+      // Only Superadmin can provision users or alter roles/privileges. Self may update only safe fields (lastLogin)
+      allow create: if isSignedIn() && (isSuperAdmin() || request.auth.uid == userId);
+      allow update: if isSignedIn() && (
+        isSuperAdmin() || 
+        (request.auth.uid == userId && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['level', 'role', 'market', 'active']))
+      );
+      allow delete: if isSignedIn() && isSuperAdmin();
     }
 
-    match /devices/{deviceId} {
-      allow read, write: if isSignedIn();
-    }
-
-    match /markets/{marketId} {
-      allow read, write: if isSignedIn();
-    }
-
+    // 4. Biometric Attendance Logs (Role & Market bounded)
     match /attendance/{attendanceId} {
-      allow read, write: if isSignedIn();
+      allow read: if isSignedIn() && canAccessMarket(resource.data.market);
+      allow create: if isSignedIn() 
+        && isValidId(attendanceId)
+        && canAccessMarket(request.resource.data.market)
+        && request.resource.data.staffId is string
+        && request.resource.data.date is string
+        && request.resource.data.clockIn is string;
+      allow update: if isSignedIn() && isSupervisor() && canAccessMarket(resource.data.market);
+      allow delete: if isSignedIn() && isMD();
     }
 
-    match /zones/{zoneId} {
-      allow read, write: if isSignedIn();
-    }
-
+    // 5. Immutable Audit Telemetry Logs (Append-only, no modification or deletion)
     match /telemetry_logs/{logId} {
-      allow read, write: if isSignedIn();
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() 
+        && isValidId(logId)
+        && request.resource.data.action is string
+        && request.resource.data.time is string;
+      allow update: if false; // Strict immutability
+      allow delete: if false; // Strict immutability
     }
 
+    // 6. System & Payroll Coefficients Settings
+    match /settings/{settingId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isMD();
+    }
+
+    // 7. Staff Leave Records
+    match /leaves/{leaveId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(leaveId);
+      allow update: if isSignedIn() && isSupervisor();
+      allow delete: if isSignedIn() && isSuperAdmin();
+    }
+
+    // 8. Markets & Facility Nodes
+    match /markets/{marketId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isManager();
+    }
+
+    // 9. Staff Nominal Directory
     match /staff/{staffId} {
-      allow read, write: if isSignedIn();
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isSupervisor();
     }
 
+    // 10. Biometric & Edge Devices
+    match /devices/{deviceId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isManager();
+    }
+
+    // 11. Assets & Warehouse Stocks
     match /assets/{assetId} {
-      allow read, write: if isSignedIn();
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isManager();
     }
 
     match /asset_stocks/{stockId} {
-      allow read, write: if isSignedIn();
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isManager();
     }
 
     match /purchase_orders/{poId} {
-      allow read, write: if isSignedIn();
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isManager();
+    }
+
+    // 12. Pipeline Events & Zones
+    match /events/{eventId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isManager();
+    }
+
+    match /zones/{zoneId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isManager();
     }
   }
 }

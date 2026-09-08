@@ -69,14 +69,16 @@ export interface AmmlAttendance {
 
 export interface AmmlUser {
   id: string;
+  uid?: string;
   name: string;
   email: string;
   staffId?: string | null;
   level: 'SUPERADMIN' | 'MD' | 'MANAGER' | 'SUPERVISOR' | 'OFFICER';
+  role?: 'SUPERADMIN' | 'MD' | 'MANAGER' | 'SUPERVISOR' | 'OFFICER';
   market: string; // 'all' or market name
+  markets?: string[]; // assigned markets list
   lastLogin: string;
   active: boolean;
-  _demoPass?: string;
 }
 
 export interface AmmlActivityLog {
